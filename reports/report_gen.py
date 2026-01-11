@@ -1,4 +1,8 @@
-from fpdf import FPDF
+try:
+    from fpdf import FPDF
+except ImportError:
+    FPDF = None
+
 import datetime
 import pandas as pd
 
@@ -14,6 +18,8 @@ class MissionReport(FPDF):
         self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
 
 def generate_pdf_report(df_results, summary_stats):
+    if FPDF is None:
+        return b"Error: FPDF library not installed. Please install 'fpdf' to generate reports."
     pdf = MissionReport()
     pdf.add_page()
     
