@@ -142,7 +142,7 @@ def dbscan_ui():
     params = {}
 
     # =================================================
-    # DBSCAN PARAMS (AUTO-TUNED)
+    # DBSCAN PARAMS (AUTO-TUNED / MANUAL)
     # =================================================
     if algorithm == "DBSCAN":
 
@@ -173,9 +173,41 @@ def dbscan_ui():
 
             st.success(f"Auto-Tuned DBSCAN → eps={best_eps:.2f}")
 
-        tuned = state.get("tuned_params_dbscan", {})
-        params["eps"] = tuned.get("eps", 0.7)
-        params["min_samples"] = tuned.get("min_samples", 5)
+            st.success(f"Auto-Tuned DBSCAN → eps={best_eps:.2f}")
+
+        # -----------------------------
+        # -----------------------------
+        # PARAMETER-SPECIFIC TOLERANCES
+        # -----------------------------
+        st.subheader("Clustering Tolerances (PDW Units)")
+        
+        # Default Tolerances (can be tuned)
+        c1, c2 = st.columns(2)
+        with c1:
+            tol_freq = st.number_input("Freq Tolerance (±MHz)", 0.1, 100.0, 10.0, help="Max deviation: ±10 MHz")
+            tol_pw   = st.number_input("PW Tolerance (±µs)", 0.01, 50.0, 2.0, help="Max deviation: ±2 µs")
+        with c2:
+            tol_pri  = st.number_input("PRI Tolerance (±µs)", 0.1, 500.0, 20.0, help="Max deviation: ±20 µs")
+            tol_doa  = st.number_input("DOA Tolerance (±deg)", 0.1, 45.0, 5.0, help="Max deviation: ±5 deg")
+
+        st.caption("These values define the 'Unit Distance' for the clustering algorithm.")
+
+        # Global 'Tightness' multiplier (effectively Epsilon)
+        # If set to 1.0, it respects the above tolerances exactly as the radius.
+        eps_mult = st.slider("Cluster Tightness (Multiplier)", 0.1, 2.0, 1.0, 0.1, help="1.0 = Strict Tolerance. Higher = Looser clusters.")
+        
+        min_samples_val = st.slider("Min Pulses per Cluster", 2, 20, 5, 1)
+
+        params["eps"] = eps_mult
+        params["min_samples"] = min_samples_val
+        
+        # Store tolerances for processing
+        st.session_state.custom_tols = {
+            "freq_MHz": tol_freq,
+            "pri_us": tol_pri,
+            "pw_us": tol_pw,
+            "doa_deg": tol_doa
+        }
 
     # =================================================
     # HDBSCAN PARAMS
@@ -194,12 +226,27 @@ def dbscan_ui():
     # =================================================
     if st.button(f"Run {algorithm}"):
 
-        X = StandardScaler().fit_transform(df_input[features].values)
-
         if algorithm == "DBSCAN":
-            labels = DBSCAN(**params).fit_predict(X)
+            # Apply Custom Scaling based on Tolerances
+            # Formula: Value / Tolerance. 
+            # Then Epsilon=1 (or user mult) means distance is normalized to tolerance.
+            
+            X_custom = df_input[features].copy()
+            tols = st.session_state.get("custom_tols", {})
+            
+            for col in features:
+                if col in tols:
+                     X_custom[col] = X_custom[col] / tols[col]
+            
+            # Use the custom scaled X, not standard scaler
+            # We must convert to values, handle NaNs if any (though shouldn't be)
+            X_final = X_custom.fillna(0).values
+            labels = DBSCAN(**params).fit_predict(X_final)
 
         elif algorithm == "HDBSCAN":
+            # HDBSCAN still uses standard scaling for now
+            X = StandardScaler().fit_transform(df_input[features].values)
+            
             if HDBSCAN_LIB == "sklearn":
                 labels = HDBSCAN(**params).fit_predict(X)
             else:
@@ -223,6 +270,14 @@ def dbscan_ui():
     # =================================================
     # RESULTS DISPLAY – TABLE-ONLY, 3-WINDOW VIEW ✅ REPLACED
     # =================================================
+    # Helper for time formatting
+    def toa_us_to_hms(toa_us):
+        total_seconds = int(toa_us // 1_000_000)
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
     if state.get("results") is not None:
 
         df_out = df_input.copy()
@@ -234,8 +289,12 @@ def dbscan_ui():
             f"""
             ### ✅ De-Interleaving Summary
             - **Detected Emitters:** {summ['clusters']}
-            - **Expected Emitters:** {summ.get('expected')}
+            - **Expected Emitters:** {summ.get('expected', 'Unknown')}
             - **Unassigned Pulses:** {summ['noise']}
+            
+            **Applied Tolerances:**
+            - Freq: `±{st.session_state.custom_tols.get('freq_MHz', 'N/A')} MHz` | PRI: `±{st.session_state.custom_tols.get('pri_us', 'N/A')} µs`
+            - Epsilon Mult: `{params.get('eps', 'N/A')}` | Min Samples: `{params.get('min_samples', 'N/A')}`
             """
         )
 
@@ -257,7 +316,13 @@ def dbscan_ui():
         with col1:
             st.markdown("### 🔀 Interleaved PDWs (Raw Input)")
             df_interleaved = df_input.sort_values("toa_us").round(2)
-            st.dataframe(df_interleaved, height=420, use_container_width=True)
+            # Add Formatted Time Column
+            df_interleaved.insert(0, "Time", df_interleaved["toa_us"].apply(toa_us_to_hms))
+            
+            # Hide raw toa_us if preferred, or keep both. 
+            # Reordering to show Time first.
+            cols = ["Time", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+            st.dataframe(df_interleaved[cols], height=420, use_container_width=True)
             st.caption("Raw interleaved PDW stream")
 
         # WINDOW 2 — DE-INTERLEAVED EMITTER SUMMARY
@@ -301,9 +366,11 @@ def dbscan_ui():
                     f"**Emitter {selected_emitter} — Pulses: {len(df_track)}**"
                 )
 
+                df_track.insert(0, "Time", df_track["toa_us"].apply(toa_us_to_hms))
+
                 st.dataframe(
                     df_track[
-                        ["toa_us", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+                        ["Time", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
                     ],
                     height=360,
                     use_container_width=True

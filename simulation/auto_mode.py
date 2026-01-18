@@ -53,9 +53,9 @@ def auto_mode_ui():
     # -----------------------------
     st.subheader("Emitter Type Distribution (%)")
 
-    fixed_pct = st.number_input("Fixed Emitters (%)", 0, 100, cfg.get("fixed_pct", 60))
-    agile_pct = st.number_input("Frequency Agile Emitters (%)", 0, 100, cfg.get("agile_pct", 25))
-    stagger_pct = st.number_input("Staggered PRI Emitters (%)", 0, 100, cfg.get("stagger_pct", 15))
+    fixed_pct = st.number_input("Fixed Emitters (%)", 0, 100, cfg.get("fixed_pct", 100))
+    agile_pct = st.number_input("Frequency Agile Emitters (%)", 0, 100, cfg.get("agile_pct", 0))
+    stagger_pct = st.number_input("Staggered PRI Emitters (%)", 0, 100, cfg.get("stagger_pct", 0))
 
     if fixed_pct + agile_pct + stagger_pct != 100:
         st.error("Emitter percentages must sum to 100")
@@ -113,6 +113,28 @@ def auto_mode_ui():
     cfg["doa_max"] = doa_max
 
     # -----------------------------
+    # SIMULATION NOISE (JITTER)
+    # -----------------------------
+    st.subheader("Simulation Noise (Jitter)")
+    st.caption("Controls the randomness added to the generated pulses.")
+    
+    saved_noise_freq = cfg.get("noise_freq", 0.0)
+    noise_freq = st.number_input("Frequency Noise (±MHz)", 0.0, 50.0, float(saved_noise_freq), 0.5)
+    cfg["noise_freq"] = noise_freq
+
+    saved_noise_pri = cfg.get("noise_pri_pct", 0.0) # percent
+    noise_pri = st.number_input("PRI Jitter (±%)", 0.0, 50.0, float(saved_noise_pri), 0.5)
+    cfg["noise_pri_pct"] = noise_pri
+
+    saved_noise_pw = cfg.get("noise_pw_pct", 0.0) # percent
+    noise_pw = st.number_input("PW Jitter (±%)", 0.0, 50.0, float(saved_noise_pw), 0.5)
+    cfg["noise_pw_pct"] = noise_pw
+
+    saved_noise_doa = cfg.get("noise_doa", 0.0)
+    noise_doa = st.number_input("DOA Noise (±deg)", 0.0, 10.0, float(saved_noise_doa), 0.5)
+    cfg["noise_doa"] = noise_doa
+
+    # -----------------------------
     # SIMULATION CONTROL
     # -----------------------------
     st.subheader("Simulation Control")
@@ -128,11 +150,12 @@ def auto_mode_ui():
             st.session_state.auto_running = False
 
     with c3:
-        if st.button("⏹ Reset"):
+        if st.button("🔴 Reset Simulation & Clear Data", type="primary", help="Clears all generated data and resets configuration."):
             st.session_state.auto_running = False
             st.session_state.global_time_us = 0.0
             st.session_state.pdw_buffer = []
-            st.success("Auto mode reset")
+            st.session_state.auto_config.clear()
+            st.rerun()
 
     # -----------------------------
     # GENERATE PDWs
@@ -144,7 +167,8 @@ def auto_mode_ui():
             fixed_pct, agile_pct, stagger_pct,
             f_min, f_max, pri_min, pri_max,
             pw_min, pw_max, amp_min, amp_max,
-            doa_min, doa_max
+            doa_min, doa_max,
+            noise_freq, noise_pri, noise_pw, noise_doa
         )
 
         out_dir = st.session_state.get("user_output_dir", OUTPUT_DIR)
@@ -170,7 +194,8 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
                      fixed_pct, agile_pct, stagger_pct,
                      f_min, f_max, pri_min, pri_max,
                      pw_min, pw_max, amp_min, amp_max,
-                     doa_min, doa_max):
+                     doa_min, doa_max,
+                     n_freq, n_pri_pct, n_pw_pct, n_doa):
 
     rows = []
 
@@ -189,20 +214,32 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
     )
     np.random.shuffle(emitter_types)
 
-    for etype in emitter_types:
+    # Create stratified/separated base parameters to prevent overlap (detected==expected)
+    # 1. Generate base frequencies evenly spaced
+    base_freqs = np.linspace(f_min, f_max, num_emitters + 2)[1:-1] # avoid edges
+    np.random.shuffle(base_freqs) # randomize assignment
+    
+    # 2. Generate base PRIs evenly spaced
+    base_pris = np.linspace(pri_min, pri_max, num_emitters + 2)[1:-1]
+    np.random.shuffle(base_pris)
+
+    for i, etype in enumerate(emitter_types):
 
         # Base parameters (per emitter)
-        base_freq = np.random.uniform(f_min, f_max)
-        base_pri  = np.random.uniform(pri_min, pri_max)
+        # Add slight jitter to the stratified base, but keeping them distinct
+        base_freq = base_freqs[i] + np.random.uniform(-50, 50) 
+        base_pri  = base_pris[i]  + np.random.uniform(-100, 100)
+        
         base_pw   = np.random.uniform(pw_min, pw_max)
         base_amp  = np.random.uniform(amp_min, amp_max)
         base_doa  = np.random.uniform(doa_min, doa_max)
 
         # Tolerances
-        FREQ_TOL = 10.0
-        PRI_TOL  = 0.02 * base_pri
-        PW_TOL   = 0.05 * base_pw
-        DOA_TOL  = 2.0
+        # Tolerances (Noise)
+        FREQ_TOL = n_freq
+        PRI_TOL  = (n_pri_pct / 100.0) * base_pri
+        PW_TOL   = (n_pw_pct / 100.0) * base_pw
+        DOA_TOL  = n_doa
         AMP_TOL  = 1.0
 
         # Agile frequency modes
@@ -219,7 +256,10 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
         else:
             pri_modes = [base_pri]
 
-        toa = np.random.uniform(window_start, window_end)
+        # Start TOA near the beginning of the window to ensure pulses fit
+        # allowing for some stochastic offset
+        start_offset = np.random.uniform(0, pri_modes[0]) 
+        toa = window_start + start_offset
 
         for k in range(pulses_per_emitter):
 
@@ -235,8 +275,7 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
                 "toa_us": toa
             })
 
-            toa += pri
-            if toa > window_end:
-                break
+            # if toa > window_end:
+            #    break
 
     return pd.DataFrame(rows)

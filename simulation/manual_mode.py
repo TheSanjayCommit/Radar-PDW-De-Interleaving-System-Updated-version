@@ -91,7 +91,7 @@ def manual_mode_ui():
                 cfg[f"freq_{i}_{m}"] = val # SAVE
                 freqs.append(val)
         else:
-            saved_f = cfg.get(f"freq_{i}", 9000.0)
+            saved_f = cfg.get(f"freq_{i}", 9000.0 + i * 500.0)
             val = st.number_input(
                 "Base Frequency (MHz)",
                 500.0, 40000.0,
@@ -143,7 +143,7 @@ def manual_mode_ui():
                 cfg[f"pri_{i}_{p}"] = val # SAVE
                 pri_values.append(val)
         else:
-            saved_pri = cfg.get(f"pri_{i}", 2000.0)
+            saved_pri = cfg.get(f"pri_{i}", 2000.0 + i * 500.0)
             val = st.number_input(
                 "Base PRI (µs)",
                 2.0, 20000.0,
@@ -193,6 +193,28 @@ def manual_mode_ui():
         })
 
     # =================================================
+    # SIMULATION NOISE (JITTER)
+    # -----------------------------
+    st.subheader("Simulation Noise (Jitter)")
+    st.caption("Controls the randomness added to the generated pulses.")
+    
+    saved_noise_freq = cfg.get("noise_freq", 0.0)
+    noise_freq = st.number_input("Frequency Noise (±MHz)", 0.0, 50.0, float(saved_noise_freq), 0.5)
+    cfg["noise_freq"] = noise_freq
+
+    saved_noise_pri = cfg.get("noise_pri_pct", 0.0) # percent
+    noise_pri = st.number_input("PRI Jitter (±%)", 0.0, 50.0, float(saved_noise_pri), 0.5)
+    cfg["noise_pri_pct"] = noise_pri
+
+    saved_noise_pw = cfg.get("noise_pw_pct", 0.0) # percent
+    noise_pw = st.number_input("PW Jitter (±%)", 0.0, 50.0, float(saved_noise_pw), 0.5)
+    cfg["noise_pw_pct"] = noise_pw
+
+    saved_noise_doa = cfg.get("noise_doa", 0.0)
+    noise_doa = st.number_input("DOA Noise (±deg)", 0.0, 10.0, float(saved_noise_doa), 0.5)
+    cfg["noise_doa"] = noise_doa
+
+    # =================================================
     # CONTROLS
     # =================================================
     c1, c2, c3 = st.columns(3)
@@ -206,10 +228,13 @@ def manual_mode_ui():
             st.session_state.manual_running = False
 
     with c3:
-        if st.button("⏹ Reset"):
+        if st.button("🔴 Reset Simulation & Clear Data", type="primary", help="Clears all generated data and resets configuration."):
             st.session_state.manual_running = False
             st.session_state.manual_global_time_us = 0.0
             st.session_state.manual_pdw_buffer = []
+            # Clear config to force re-load of staggered defaults
+            st.session_state.manual_config.clear()
+            st.rerun()
 
     # =================================================
     # GENERATE PDWs
@@ -224,7 +249,9 @@ def manual_mode_ui():
 
         for e in emitters:
 
-            toa = np.random.uniform(window_start, window_end)
+            # Start TOA near the beginning of the window to ensure pulses fit
+            start_offset = np.random.uniform(0, e["pri_values"][0])
+            toa = window_start + start_offset
 
             for k in range(pulses_per_emitter):
 
@@ -232,20 +259,27 @@ def manual_mode_ui():
                 pri  = e["pri_values"][k % len(e["pri_values"])]
 
                 if e["pri_type"] == "Jittered":
-                    pri = pri + np.random.normal(0, 0.02 * pri)
+                    # If Emitter ITSELF is jittered, add EXTRA jitter
+                    pri = pri + np.random.normal(0, 0.05 * pri)
+
+                # Use Configured Noise
+                sim_freq_tol = noise_freq
+                sim_pri_tol = (noise_pri / 100.0) * pri
+                sim_pw_tol = (noise_pw / 100.0) * e["pw"]
+                sim_doa_tol = noise_doa
+                sim_amp_tol = 1.0
 
                 rows.append({
-                    "freq_MHz": freq + np.random.normal(0, 5),
-                    "pri_us": pri,
-                    "pw_us": e["pw"] + np.random.normal(0, 0.05 * e["pw"]),
-                    "doa_deg": e["doa"] + np.random.normal(0, 2),
-                    "amp_dB": e["amp"] + np.random.normal(0, 1),
+                    "freq_MHz": freq + np.random.normal(0, sim_freq_tol),
+                    "pri_us": pri + np.random.normal(0, sim_pri_tol), # Fixed jitter on PRI
+                    "pw_us": e["pw"] + np.random.normal(0, sim_pw_tol),
+                    "doa_deg": e["doa"] + np.random.normal(0, sim_doa_tol),
+                    "amp_dB": e["amp"] + np.random.normal(0, sim_amp_tol),
                     "toa_us": toa
                 })
 
-                toa += pri
-                if toa > window_end:
-                    break
+                # if toa > window_end:
+                #    break
 
         out_dir = st.session_state.get("user_output_dir", OUTPUT_DIR)
         st.session_state.manual_pdw_buffer.extend(rows)
