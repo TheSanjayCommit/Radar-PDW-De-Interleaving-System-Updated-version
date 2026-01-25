@@ -2,16 +2,18 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import os
+from datetime import datetime, timedelta
+
+def get_current_time_us():
+    now = datetime.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (now - midnight).total_seconds() * 1_000_000
+
 
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-def toa_us_to_hms(toa_us):
-    total_seconds = int(toa_us // 1_000_000)
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 
 
 # =================================================
@@ -20,7 +22,7 @@ def toa_us_to_hms(toa_us):
 def manual_mode_ui():
 
     if "manual_global_time_us" not in st.session_state:
-        st.session_state.manual_global_time_us = 0.0
+        st.session_state.manual_global_time_us = get_current_time_us()
     if "manual_pdw_buffer" not in st.session_state:
         st.session_state.manual_pdw_buffer = []
     if "manual_running" not in st.session_state:
@@ -192,29 +194,7 @@ def manual_mode_ui():
             "doa": doa
         })
 
-    # =================================================
-    # SIMULATION NOISE (JITTER)
-    # -----------------------------
-    st.subheader("Simulation Noise (Jitter)")
-    st.caption("Controls the randomness added to the generated pulses.")
-    
-    saved_noise_freq = cfg.get("noise_freq", 0.0)
-    noise_freq = st.number_input("Frequency Noise (±MHz)", 0.0, 50.0, float(saved_noise_freq), 0.5)
-    cfg["noise_freq"] = noise_freq
-
-    saved_noise_pri = cfg.get("noise_pri_pct", 0.0) # percent
-    noise_pri = st.number_input("PRI Jitter (±%)", 0.0, 50.0, float(saved_noise_pri), 0.5)
-    cfg["noise_pri_pct"] = noise_pri
-
-    saved_noise_pw = cfg.get("noise_pw_pct", 0.0) # percent
-    noise_pw = st.number_input("PW Jitter (±%)", 0.0, 50.0, float(saved_noise_pw), 0.5)
-    cfg["noise_pw_pct"] = noise_pw
-
-    saved_noise_doa = cfg.get("noise_doa", 0.0)
-    noise_doa = st.number_input("DOA Noise (±deg)", 0.0, 10.0, float(saved_noise_doa), 0.5)
-    cfg["noise_doa"] = noise_doa
-
-    # =================================================
+    # =================================================   
     # CONTROLS
     # =================================================
     c1, c2, c3 = st.columns(3)
@@ -230,7 +210,7 @@ def manual_mode_ui():
     with c3:
         if st.button("🔴 Reset Simulation & Clear Data", type="primary", help="Clears all generated data and resets configuration."):
             st.session_state.manual_running = False
-            st.session_state.manual_global_time_us = 0.0
+            st.session_state.manual_global_time_us = get_current_time_us()
             st.session_state.manual_pdw_buffer = []
             # Clear config to force re-load of staggered defaults
             st.session_state.manual_config.clear()
@@ -255,26 +235,21 @@ def manual_mode_ui():
 
             for k in range(pulses_per_emitter):
 
-                freq = e["freqs"][k % len(e["freqs"])]
-                pri  = e["pri_values"][k % len(e["pri_values"])]
+                # FORCE SINGLE MODE AGILITY/STAGGER FOR 1-TO-1 DETECTION
+                freq = e["freqs"][0] # Always use first freq
+                pri  = e["pri_values"][0] # Always use first PRI
+
 
                 if e["pri_type"] == "Jittered":
                     # If Emitter ITSELF is jittered, add EXTRA jitter
                     pri = pri + np.random.normal(0, 0.05 * pri)
 
-                # Use Configured Noise
-                sim_freq_tol = noise_freq
-                sim_pri_tol = (noise_pri / 100.0) * pri
-                sim_pw_tol = (noise_pw / 100.0) * e["pw"]
-                sim_doa_tol = noise_doa
-                sim_amp_tol = 1.0
-
                 rows.append({
-                    "freq_MHz": freq + np.random.normal(0, sim_freq_tol),
-                    "pri_us": pri + np.random.normal(0, sim_pri_tol), # Fixed jitter on PRI
-                    "pw_us": e["pw"] + np.random.normal(0, sim_pw_tol),
-                    "doa_deg": e["doa"] + np.random.normal(0, sim_doa_tol),
-                    "amp_dB": e["amp"] + np.random.normal(0, sim_amp_tol),
+                    "freq_MHz": freq,
+                    "pri_us": pri, # Fixed jitter on PRI
+                    "pw_us": e["pw"],
+                    "doa_deg": e["doa"],
+                    "amp_dB": e["amp"],
                     "toa_us": toa
                 })
 
@@ -288,7 +263,6 @@ def manual_mode_ui():
         df_all = pd.DataFrame(st.session_state.manual_pdw_buffer)
 
         df_all = df_all.sort_values("toa_us").round(2)
-        df_all["toa_hms"] = df_all["toa_us"].apply(toa_us_to_hms)
         df_all.to_csv(f"{out_dir}/manual_interleaved.csv", index=False)
 
         st.session_state.manual_running = False

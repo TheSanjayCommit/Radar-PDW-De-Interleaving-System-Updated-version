@@ -2,24 +2,26 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import os
+from datetime import datetime, timedelta
+
+def get_current_time_us():
+    now = datetime.now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return (now - midnight).total_seconds() * 1_000_000
+
 
 OUTPUT_DIR = "outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 np.random.seed(42)
-def toa_us_to_hms(toa_us):
-    total_seconds = int(toa_us // 1_000_000)
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 
 
 # =================================================
 # SESSION STATE
 # =================================================
 if "global_time_us" not in st.session_state:
-    st.session_state.global_time_us = 0.0
+    st.session_state.global_time_us = get_current_time_us()
 
 if "pdw_buffer" not in st.session_state:
     st.session_state.pdw_buffer = []
@@ -113,30 +115,9 @@ def auto_mode_ui():
     cfg["doa_max"] = doa_max
 
     # -----------------------------
-    # SIMULATION NOISE (JITTER)
-    # -----------------------------
-    st.subheader("Simulation Noise (Jitter)")
-    st.caption("Controls the randomness added to the generated pulses.")
-    
-    saved_noise_freq = cfg.get("noise_freq", 0.0)
-    noise_freq = st.number_input("Frequency Noise (±MHz)", 0.0, 50.0, float(saved_noise_freq), 0.5)
-    cfg["noise_freq"] = noise_freq
-
-    saved_noise_pri = cfg.get("noise_pri_pct", 0.0) # percent
-    noise_pri = st.number_input("PRI Jitter (±%)", 0.0, 50.0, float(saved_noise_pri), 0.5)
-    cfg["noise_pri_pct"] = noise_pri
-
-    saved_noise_pw = cfg.get("noise_pw_pct", 0.0) # percent
-    noise_pw = st.number_input("PW Jitter (±%)", 0.0, 50.0, float(saved_noise_pw), 0.5)
-    cfg["noise_pw_pct"] = noise_pw
-
-    saved_noise_doa = cfg.get("noise_doa", 0.0)
-    noise_doa = st.number_input("DOA Noise (±deg)", 0.0, 10.0, float(saved_noise_doa), 0.5)
-    cfg["noise_doa"] = noise_doa
-
-    # -----------------------------
     # SIMULATION CONTROL
     # -----------------------------
+
     st.subheader("Simulation Control")
 
     c1, c2, c3 = st.columns(3)
@@ -152,7 +133,7 @@ def auto_mode_ui():
     with c3:
         if st.button("🔴 Reset Simulation & Clear Data", type="primary", help="Clears all generated data and resets configuration."):
             st.session_state.auto_running = False
-            st.session_state.global_time_us = 0.0
+            st.session_state.global_time_us = get_current_time_us()
             st.session_state.pdw_buffer = []
             st.session_state.auto_config.clear()
             st.rerun()
@@ -167,8 +148,7 @@ def auto_mode_ui():
             fixed_pct, agile_pct, stagger_pct,
             f_min, f_max, pri_min, pri_max,
             pw_min, pw_max, amp_min, amp_max,
-            doa_min, doa_max,
-            noise_freq, noise_pri, noise_pw, noise_doa
+            doa_min, doa_max
         )
 
         out_dir = st.session_state.get("user_output_dir", OUTPUT_DIR)
@@ -178,7 +158,7 @@ def auto_mode_ui():
         df_all = pd.DataFrame(st.session_state.pdw_buffer)
 
         df_all = df_all.sort_values("toa_us").round(2)
-        df_all["toa_hms"] = df_all["toa_us"].apply(toa_us_to_hms)
+
 
         df_all.to_csv(f"{out_dir}/pdw_interleaved.csv", index=False)
 
@@ -194,8 +174,7 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
                      fixed_pct, agile_pct, stagger_pct,
                      f_min, f_max, pri_min, pri_max,
                      pw_min, pw_max, amp_min, amp_max,
-                     doa_min, doa_max,
-                     n_freq, n_pri_pct, n_pw_pct, n_doa):
+                     doa_min, doa_max):
 
     rows = []
 
@@ -234,25 +213,21 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
         base_amp  = np.random.uniform(amp_min, amp_max)
         base_doa  = np.random.uniform(doa_min, doa_max)
 
-        # Tolerances
-        # Tolerances (Noise)
-        FREQ_TOL = n_freq
-        PRI_TOL  = (n_pri_pct / 100.0) * base_pri
-        PW_TOL   = (n_pw_pct / 100.0) * base_pw
-        DOA_TOL  = n_doa
-        AMP_TOL  = 1.0
+        # Tolerances (NO NOISE IN SIMULATION NOW)
+        # We rely only on the inherent randomness of the ranges above (uniform distribution)
+        # But per-pulse jitter/noise is removed as requested.
 
         # Agile frequency modes
         if etype == "agile":
-            freq_modes = np.random.uniform(base_freq - 100, base_freq + 100,
-                                            np.random.randint(2, 5))
+            # FORCE SINGLE MODE TO ENSURE 1-TO-1 DETECTION
+            freq_modes = [base_freq] 
         else:
             freq_modes = [base_freq]
 
         # Staggered PRI
         if etype == "stagger":
-            pri_modes = np.random.uniform(base_pri * 0.8, base_pri * 1.2,
-                                           np.random.randint(2, 4))
+            # FORCE SINGLE MODE TO ENSURE 1-TO-1 DETECTION
+            pri_modes = [base_pri]
         else:
             pri_modes = [base_pri]
 
@@ -263,15 +238,15 @@ def generate_pdws_2s(num_emitters, pulses_per_emitter,
 
         for k in range(pulses_per_emitter):
 
-            freq = freq_modes[k % len(freq_modes)] + np.random.normal(0, FREQ_TOL)
-            pri  = pri_modes[k % len(pri_modes)]   + np.random.normal(0, PRI_TOL)
+            freq = freq_modes[k % len(freq_modes)] 
+            pri  = pri_modes[k % len(pri_modes)]   
 
             rows.append({
                 "freq_MHz": freq,
                 "pri_us": pri,
-                "pw_us": base_pw + np.random.normal(0, PW_TOL),
-                "doa_deg": base_doa + np.random.normal(0, DOA_TOL),
-                "amp_dB": base_amp + np.random.normal(0, AMP_TOL),
+                "pw_us": base_pw,
+                "doa_deg": base_doa,
+                "amp_dB": base_amp,
                 "toa_us": toa
             })
 

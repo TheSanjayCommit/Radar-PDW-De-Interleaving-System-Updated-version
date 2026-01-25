@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import DBSCAN, KMeans
 import matplotlib.pyplot as plt
 from reports.report_gen import generate_pdf_report
 
@@ -131,6 +132,7 @@ def dbscan_ui():
     algo_options = ["DBSCAN"]
     if HAS_HDBSCAN:
         algo_options.append("HDBSCAN")
+    algo_options.append("K-Means")
 
     # Load persisted algo index
     saved_algo_idx = state.get("algo_idx", 0)
@@ -222,6 +224,16 @@ def dbscan_ui():
         state["hdbscan_min_samples"] = params["min_samples"]
 
     # =================================================
+    # K-MEANS PARAMS
+    # =================================================
+    elif algorithm == "K-Means":
+        # Default to known emitters if available, else 3
+        default_k = known_emitters if known_emitters else 3
+        
+        n_clusters = st.slider("Number of Clusters (K)", 2, 20, default_k)
+        params["n_clusters"] = n_clusters
+
+    # =================================================
     # RUN DE-INTERLEAVING
     # =================================================
     if st.button(f"Run {algorithm}"):
@@ -252,6 +264,11 @@ def dbscan_ui():
             else:
                 labels = hdbscan.HDBSCAN(**params).fit_predict(X)
 
+        elif algorithm == "K-Means":
+            # K-Means uses standard scaling
+            X = StandardScaler().fit_transform(df_input[features].values)
+            labels = KMeans(**params, random_state=42, n_init=10).fit_predict(X)
+
         unique = sorted(set(labels))
         label_map = {l: i + 1 for i, l in enumerate(unique) if l != -1}
         label_map[-1] = 0
@@ -270,13 +287,7 @@ def dbscan_ui():
     # =================================================
     # RESULTS DISPLAY – TABLE-ONLY, 3-WINDOW VIEW ✅ REPLACED
     # =================================================
-    # Helper for time formatting
-    def toa_us_to_hms(toa_us):
-        total_seconds = int(toa_us // 1_000_000)
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        seconds = total_seconds % 60
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 
     if state.get("results") is not None:
 
@@ -316,12 +327,10 @@ def dbscan_ui():
         with col1:
             st.markdown("### 🔀 Interleaved PDWs (Raw Input)")
             df_interleaved = df_input.sort_values("toa_us").round(2)
-            # Add Formatted Time Column
-            df_interleaved.insert(0, "Time", df_interleaved["toa_us"].apply(toa_us_to_hms))
             
             # Hide raw toa_us if preferred, or keep both. 
             # Reordering to show Time first.
-            cols = ["Time", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+            cols = ["freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
             st.dataframe(df_interleaved[cols], height=420, use_container_width=True)
             st.caption("Raw interleaved PDW stream")
 
@@ -366,11 +375,9 @@ def dbscan_ui():
                     f"**Emitter {selected_emitter} — Pulses: {len(df_track)}**"
                 )
 
-                df_track.insert(0, "Time", df_track["toa_us"].apply(toa_us_to_hms))
-
                 st.dataframe(
                     df_track[
-                        ["Time", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+                        ["freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
                     ],
                     height=360,
                     use_container_width=True
