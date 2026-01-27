@@ -197,6 +197,7 @@ def manual_mode_ui():
     # =================================================   
     # CONTROLS
     # =================================================
+
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -266,5 +267,6 @@ def manual_mode_ui():
         df_all.to_csv(f"{out_dir}/manual_interleaved.csv", index=False)
 
         st.session_state.manual_running = False
+            
         st.success(f"Generated 2 seconds of PDWs (Total: {len(df_all)})")
         st.dataframe(df_all.tail(20))

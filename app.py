@@ -14,7 +14,6 @@ import auth
 
 from simulation.auto_mode import auto_mode_ui
 from simulation.manual_mode import manual_mode_ui
-from deinterleaving.dbscan_ui import dbscan_ui
 
 # -------------------------------------------------
 # APP CONFIG

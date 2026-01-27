@@ -67,6 +67,21 @@ A powerful module to separate interleaved pulses back into distinct emitters.
 
 ---
 
+## 📊 Understanding Data Formats
+
+### Pulse Descriptor Words (PDW)
+The system operates on PDWs, which are digital representations of radar pulses.
+*   **toa_us (Time of Arrival)**: 
+    *   The precise timestamp of when the pulse was received, measured in **microseconds (µs)** from the start of the day (midnight).
+    *   Example: `71649185336.28` corresponds to `19:54:09` (7:54 PM).
+    *   Formula: `microseconds / 1,000,000 = seconds from midnight`.
+*   **freq_MHz**: Frequency of the signal in Megahertz.
+*   **pw_us**: Pulse Width in microseconds.
+*   **amp_dB**: Amplitude (Signal Strength) in decibels.
+*   **doa_deg**: Direction of Arrival in degrees (0-360).
+
+---
+
 ## 💻 Installation & Usage
 
 ### Prerequisites

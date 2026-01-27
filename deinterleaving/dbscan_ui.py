@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN, KMeans
 import matplotlib.pyplot as plt
-from reports.report_gen import generate_pdf_report
+
 
 # Try importing HDBSCAN
 try:
@@ -309,14 +309,7 @@ def dbscan_ui():
             """
         )
 
-        st.caption("Download Report")
-        pdf_bytes = generate_pdf_report(df_out, summ)
-        st.download_button(
-            label="📄 Download Mission Report (PDF)",
-            data=pdf_bytes,
-            file_name="mission_report.pdf",
-            mime="application/pdf"
-        )
+
 
         st.divider()
         st.subheader("📊 PDW De-Interleaving View")
@@ -330,7 +323,7 @@ def dbscan_ui():
             
             # Hide raw toa_us if preferred, or keep both. 
             # Reordering to show Time first.
-            cols = ["freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
+            cols = ["toa_us", "freq_MHz", "pri_us", "pw_us", "doa_deg", "amp_dB"]
             st.dataframe(df_interleaved[cols], height=420, use_container_width=True)
             st.caption("Raw interleaved PDW stream")
 
